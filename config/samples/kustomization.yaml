@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- view_v1_arkcluster.yaml
+- view_v1_arkserver.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,0 +1,9 @@
+apiVersion: view.yadon3141.com/v1
+kind: ArkCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: ark-server-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: arkcluster-sample
+spec:
+  # TODO(user): Add fields here
