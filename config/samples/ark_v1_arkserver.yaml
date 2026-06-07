@@ -1,0 +1,9 @@
+apiVersion: ark.yadon3141.com/v1
+kind: ArkServer
+metadata:
+  labels:
+    app.kubernetes.io/name: ark-server-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: arkserver-sample
+spec:
+  # TODO(user): Add fields here

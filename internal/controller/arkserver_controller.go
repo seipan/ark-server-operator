@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	viewv1 "github.com/seipan/ark-server-operator/api/v1"
+	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
 // ArkServerReconciler reconciles a ArkServer object
@@ -33,9 +33,9 @@ type ArkServerReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=view.yadon3141.com,resources=arkservers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=view.yadon3141.com,resources=arkservers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=view.yadon3141.com,resources=arkservers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkservers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkservers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkservers/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -57,7 +57,7 @@ func (r *ArkServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 // SetupWithManager sets up the controller with the Manager.
 func (r *ArkServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&viewv1.ArkServer{}).
+		For(&arkv1.ArkServer{}).
 		Named("arkserver").
 		Complete(r)
 }

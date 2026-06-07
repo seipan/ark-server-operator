@@ -5,7 +5,19 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - view.yadon3141.com
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ark.yadon3141.com
   resources:
   - arkclusters
   - arkservers
@@ -18,14 +30,14 @@ rules:
   - update
   - watch
 - apiGroups:
-  - view.yadon3141.com
+  - ark.yadon3141.com
   resources:
   - arkclusters/finalizers
   - arkservers/finalizers
   verbs:
   - update
 - apiGroups:
-  - view.yadon3141.com
+  - ark.yadon3141.com
   resources:
   - arkclusters/status
   - arkservers/status

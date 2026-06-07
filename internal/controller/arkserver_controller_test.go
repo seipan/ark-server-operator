@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	viewv1 "github.com/seipan/ark-server-operator/api/v1"
+	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
 var _ = Describe("ArkServer Controller", func() {
@@ -40,13 +40,13 @@ var _ = Describe("ArkServer Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		arkserver := &viewv1.ArkServer{}
+		arkserver := &arkv1.ArkServer{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind ArkServer")
 			err := k8sClient.Get(ctx, typeNamespacedName, arkserver)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &viewv1.ArkServer{
+				resource := &arkv1.ArkServer{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +59,7 @@ var _ = Describe("ArkServer Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &viewv1.ArkServer{}
+			resource := &arkv1.ArkServer{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 

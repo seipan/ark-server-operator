@@ -1,7 +1,7 @@
 # This rule is not used by the project ark-server-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants read-only access to view.yadon3141.com resources.
+# Grants read-only access to ark.yadon3141.com resources.
 # This role is intended for users who need visibility into these resources
 # without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
 
@@ -14,7 +14,7 @@ metadata:
   name: arkserver-viewer-role
 rules:
 - apiGroups:
-  - view.yadon3141.com
+  - ark.yadon3141.com
   resources:
   - arkservers
   verbs:
@@ -22,7 +22,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - view.yadon3141.com
+  - ark.yadon3141.com
   resources:
   - arkservers/status
   verbs:

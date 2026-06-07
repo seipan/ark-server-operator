@@ -33,7 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	viewv1 "github.com/seipan/ark-server-operator/api/v1"
+	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -60,7 +60,7 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
-	err = viewv1.AddToScheme(scheme.Scheme)
+	err = arkv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme

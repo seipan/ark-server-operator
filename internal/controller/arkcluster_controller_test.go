@@ -18,67 +18,139 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	viewv1 "github.com/seipan/ark-server-operator/api/v1"
+	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
 var _ = Describe("ArkCluster Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	Context("ConfigMap reconciliation", func() {
+		const (
+			resourceName = "kubic"
+			namespace    = "default"
+		)
 
 		ctx := context.Background()
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		arkcluster := &viewv1.ArkCluster{}
+		namespacedName := types.NamespacedName{Name: resourceName, Namespace: namespace}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind ArkCluster")
-			err := k8sClient.Get(ctx, typeNamespacedName, arkcluster)
+			By("creating an ArkCluster with both inline ini sources and player lists")
+			existing := &arkv1.ArkCluster{}
+			err := k8sClient.Get(ctx, namespacedName, existing)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &viewv1.ArkCluster{
+				cluster := &arkv1.ArkCluster{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
-						Namespace: "default",
+						Namespace: namespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: arkv1.ArkClusterSpec{
+						ClusterName: "kubicarkcluster",
+						Image: arkv1.ImageSpec{
+							Repository: "nightdragon1/ark-docker",
+							Tag:        "v1",
+							Digest:     "sha256:" + strings.Repeat("0", 64),
+						},
+						SharedStorage: arkv1.SharedStorageSpec{
+							ExistingClaimName: "ark-shared",
+							MountPath:         "/ark-shared",
+						},
+						Game: arkv1.IniSource{
+							Inline: "[/script/shootergame.shootergamemode]\nKillXPMultiplier=8\n",
+						},
+						GameUserSettings: arkv1.IniSource{
+							Inline: "[ServerSettings]\nServerPVE=true\n",
+						},
+						ArkManager: arkv1.ArkManagerSpec{
+							BanListURL: "http://playark.com/banlist.txt",
+							Flags: arkv1.ArkFlags{
+								Crossplay: boolPtr(true),
+							},
+							Options: arkv1.ArkOptions{
+								ActiveEvent: arkv1.ArkEventSummer,
+							},
+						},
+						PlayerLists: arkv1.PlayerListsSpec{
+							AllowedCheaters: []string{"76561198030942091"},
+						},
+						Passwords: arkv1.PasswordsSpec{
+							SecretRef: arkv1.PasswordSecretRef{
+								Name: "ark-server-secrets",
+							},
+						},
+					},
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &viewv1.ArkCluster{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			cluster := &arkv1.ArkCluster{}
+			if err := k8sClient.Get(ctx, namespacedName, cluster); err == nil {
+				Expect(k8sClient.Delete(ctx, cluster)).To(Succeed())
+			}
+		})
+
+		It("creates all four operator-managed ConfigMaps with owner references", func() {
+			By("reconciling the ArkCluster")
+			r := &ArkClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance ArkCluster")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &ArkClusterReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+			expected := []struct {
+				name        string
+				expectedKey string
+			}{
+				{name: resourceName + "-arkmanager-cfg", expectedKey: arkManagerCfgKey},
+				{name: resourceName + "-game-ini", expectedKey: globalGameIniKey},
+				{name: resourceName + "-game-user-settings-ini", expectedKey: globalGameUserSettingsIniKey},
+				{name: resourceName + "-player-lists", expectedKey: allowedCheatersKey},
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
+			for _, want := range expected {
+				cm := &corev1.ConfigMap{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: want.name, Namespace: namespace}, cm)).
+					To(Succeed(), "ConfigMap %s should exist", want.name)
+				Expect(cm.Data).To(HaveKey(want.expectedKey), "ConfigMap %s should have data key %s", want.name, want.expectedKey)
+				Expect(cm.OwnerReferences).To(HaveLen(1), "ConfigMap %s should have one owner reference", want.name)
+				Expect(cm.OwnerReferences[0].Kind).To(Equal("ArkCluster"))
+				Expect(cm.OwnerReferences[0].Name).To(Equal(resourceName))
+				Expect(cm.OwnerReferences[0].Controller).NotTo(BeNil())
+				Expect(*cm.OwnerReferences[0].Controller).To(BeTrue())
+			}
+
+			By("checking the rendered arkmanager.cfg contents")
+			cm := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: resourceName + "-arkmanager-cfg", Namespace: namespace,
+			}, cm)).To(Succeed())
+
+			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_clusterid=kubicarkcluster"))
+			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_ActiveEvent=Summer"))
+			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkflag_crossplay=true"))
+		})
+
+		It("is idempotent — a second reconcile is a no-op", func() {
+			r := &ArkClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Sanity: arkmanager.cfg CM still has expected data after the second reconcile.
+			cm := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: resourceName + "-arkmanager-cfg", Namespace: namespace,
+			}, cm)).To(Succeed())
+			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_clusterid=kubicarkcluster"))
 		})
 	})
 })

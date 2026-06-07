@@ -14,7 +14,7 @@ resources:
     namespaced: true
   controller: true
   domain: yadon3141.com
-  group: view
+  group: ark
   kind: ArkCluster
   path: github.com/seipan/ark-server-operator/api/v1
   version: v1
@@ -23,7 +23,7 @@ resources:
     namespaced: true
   controller: true
   domain: yadon3141.com
-  group: view
+  group: ark
   kind: ArkServer
   path: github.com/seipan/ark-server-operator/api/v1
   version: v1
