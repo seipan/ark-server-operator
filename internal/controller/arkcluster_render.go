@@ -169,17 +169,14 @@ func renderArkManagerCfg(c *arkv1.ArkCluster) string {
 	writeFlag(&b, "arkflag_NoBattlEye", s.Flags.NoBattlEye)
 
 	fmt.Fprintf(&b, "arkopt_clusterid=%s\n", c.Spec.ClusterName)
-
 	mount := c.Spec.SharedStorage.MountPath
 	if mount == "" {
 		mount = defaultSharedMountPath
 	}
 	fmt.Fprintf(&b, "arkopt_ClusterDirOverride=%s\n", mount)
-
 	if s.Options.ActiveEvent != "" && s.Options.ActiveEvent != arkv1.ArkEventNone {
 		fmt.Fprintf(&b, "arkopt_ActiveEvent=%s\n", s.Options.ActiveEvent)
 	}
-
 	return b.String()
 }
 
@@ -203,4 +200,3 @@ func writeFlag(b *strings.Builder, key string, v *bool) {
 	}
 	fmt.Fprintf(b, "%s=%s\n", key, boolStr(*v))
 }
-
