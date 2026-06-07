@@ -30,11 +30,11 @@ func boolPtr(b bool) *bool { return &b }
 func newClusterForRender() *arkv1.ArkCluster {
 	return &arkv1.ArkCluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kubic",
+			Name:      "test",
 			Namespace: "ark",
 		},
 		Spec: arkv1.ArkClusterSpec{
-			ClusterName: "kubicarkcluster",
+			ClusterName: "test-cluster",
 			SharedStorage: arkv1.SharedStorageSpec{
 				MountPath: "/ark-shared",
 			},
@@ -85,7 +85,7 @@ func TestRenderArkManagerCfg(t *testing.T) {
 		`arkflag_crossplay=true`,
 		`arkflag_NoBattlEye=true`,
 		`arkflag_USEALLAVAILABLECORES=true`,
-		`arkopt_clusterid=kubicarkcluster`,
+		`arkopt_clusterid=test-cluster`,
 		`arkopt_ClusterDirOverride=/ark-shared`,
 		`arkopt_ActiveEvent=Summer`,
 		`ark_SessionName=${SESSIONNAME}`,

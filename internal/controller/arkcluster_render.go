@@ -20,10 +20,9 @@ import (
 	"fmt"
 	"strings"
 
+	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
 // ConfigMap data keys rendered by the ArkCluster reconciler.
@@ -41,25 +40,90 @@ const (
 // objects constructed in tests without the API server applying defaults.
 const defaultSharedMountPath = "/ark-shared"
 
-// ArkManagerCfgConfigMapName returns the ConfigMap name holding arkmanager.cfg.
-func ArkManagerCfgConfigMapName(c *arkv1.ArkCluster) string {
+func arkManagerCfgConfigMapName(c *arkv1.ArkCluster) string {
 	return c.Name + "-arkmanager-cfg"
 }
 
-// GlobalGameIniConfigMapName returns the ConfigMap name holding GlobalGame.ini.
-func GlobalGameIniConfigMapName(c *arkv1.ArkCluster) string {
+func globalGameIniConfigMapName(c *arkv1.ArkCluster) string {
 	return c.Name + "-game-ini"
 }
 
-// GlobalGameUserSettingsConfigMapName returns the ConfigMap name holding
-// GlobalGameUserSettings.ini.
-func GlobalGameUserSettingsConfigMapName(c *arkv1.ArkCluster) string {
+func globalGameUserSettingsConfigMapName(c *arkv1.ArkCluster) string {
 	return c.Name + "-game-user-settings-ini"
 }
 
-// PlayerListsConfigMapName returns the ConfigMap name holding the player lists.
-func PlayerListsConfigMapName(c *arkv1.ArkCluster) string {
+func playerListsConfigMapName(c *arkv1.ArkCluster) string {
 	return c.Name + "-player-lists"
+}
+
+// buildArkManagerCfgConfigMap renders the arkmanager.cfg ConfigMap.
+func buildArkManagerCfgConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      arkManagerCfgConfigMapName(c),
+			Namespace: c.Namespace,
+			Labels:    managedLabels(c),
+		},
+		Data: map[string]string{
+			arkManagerCfgKey: renderArkManagerCfg(c),
+		},
+	}
+}
+
+// buildGlobalGameIniConfigMap renders the GlobalGame.ini ConfigMap from
+// spec.game.inline. Returns nil when spec.game.configMapRef is the source —
+// in that case the user-provided ConfigMap is referenced directly downstream.
+func buildGlobalGameIniConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
+	if c.Spec.Game.Inline == "" {
+		return nil
+	}
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      globalGameIniConfigMapName(c),
+			Namespace: c.Namespace,
+			Labels:    managedLabels(c),
+		},
+		Data: map[string]string{
+			globalGameIniKey: c.Spec.Game.Inline,
+		},
+	}
+}
+
+// buildGlobalGameUserSettingsIniConfigMap renders the GlobalGameUserSettings.ini
+// ConfigMap from spec.gameUserSettings.inline. Returns nil when configMapRef is used.
+func buildGlobalGameUserSettingsIniConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
+	if c.Spec.GameUserSettings.Inline == "" {
+		return nil
+	}
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      globalGameUserSettingsConfigMapName(c),
+			Namespace: c.Namespace,
+			Labels:    managedLabels(c),
+		},
+		Data: map[string]string{
+			globalGameUserSettingsIniKey: c.Spec.GameUserSettings.Inline,
+		},
+	}
+}
+
+// buildPlayerListsConfigMap renders the three player-list text files into a
+// single ConfigMap. Empty lists produce empty data values so consumers can
+// rely on the keys existing.
+func buildPlayerListsConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
+	pl := c.Spec.PlayerLists
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      playerListsConfigMapName(c),
+			Namespace: c.Namespace,
+			Labels:    managedLabels(c),
+		},
+		Data: map[string]string{
+			allowedCheatersKey:   strings.Join(pl.AllowedCheaters, "\n"),
+			joinNoCheckKey:       strings.Join(pl.JoinNoCheck, "\n"),
+			exclusiveJoinListKey: strings.Join(pl.ExclusiveJoinList, "\n"),
+		},
+	}
 }
 
 // renderArkManagerCfg produces the plain-text arkmanager.cfg.
@@ -148,75 +212,5 @@ func managedLabels(c *arkv1.ArkCluster) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/managed-by": "ark-server-operator",
 		"app.kubernetes.io/part-of":    c.Name,
-	}
-}
-
-// buildArkManagerCfgConfigMap renders the arkmanager.cfg ConfigMap.
-func buildArkManagerCfgConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ArkManagerCfgConfigMapName(c),
-			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
-		},
-		Data: map[string]string{
-			arkManagerCfgKey: renderArkManagerCfg(c),
-		},
-	}
-}
-
-// buildGlobalGameIniConfigMap renders the GlobalGame.ini ConfigMap from
-// spec.game.inline. Returns nil when spec.game.configMapRef is the source —
-// in that case the user-provided ConfigMap is referenced directly downstream.
-func buildGlobalGameIniConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
-	if c.Spec.Game.Inline == "" {
-		return nil
-	}
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      GlobalGameIniConfigMapName(c),
-			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
-		},
-		Data: map[string]string{
-			globalGameIniKey: c.Spec.Game.Inline,
-		},
-	}
-}
-
-// buildGlobalGameUserSettingsIniConfigMap renders the GlobalGameUserSettings.ini
-// ConfigMap from spec.gameUserSettings.inline. Returns nil when configMapRef is used.
-func buildGlobalGameUserSettingsIniConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
-	if c.Spec.GameUserSettings.Inline == "" {
-		return nil
-	}
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      GlobalGameUserSettingsConfigMapName(c),
-			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
-		},
-		Data: map[string]string{
-			globalGameUserSettingsIniKey: c.Spec.GameUserSettings.Inline,
-		},
-	}
-}
-
-// buildPlayerListsConfigMap renders the three player-list text files into a
-// single ConfigMap. Empty lists produce empty data values so consumers can
-// rely on the keys existing.
-func buildPlayerListsConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
-	pl := c.Spec.PlayerLists
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      PlayerListsConfigMapName(c),
-			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
-		},
-		Data: map[string]string{
-			allowedCheatersKey:   strings.Join(pl.AllowedCheaters, "\n"),
-			joinNoCheckKey:       strings.Join(pl.JoinNoCheck, "\n"),
-			exclusiveJoinListKey: strings.Join(pl.ExclusiveJoinList, "\n"),
-		},
 	}
 }

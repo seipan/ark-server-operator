@@ -34,7 +34,7 @@ import (
 var _ = Describe("ArkCluster Controller", func() {
 	Context("ConfigMap reconciliation", func() {
 		const (
-			resourceName = "kubic"
+			resourceName = "test"
 			namespace    = "default"
 		)
 
@@ -53,7 +53,7 @@ var _ = Describe("ArkCluster Controller", func() {
 						Namespace: namespace,
 					},
 					Spec: arkv1.ArkClusterSpec{
-						ClusterName: "kubicarkcluster",
+						ClusterName: "test-cluster",
 						Image: arkv1.ImageSpec{
 							Repository: "nightdragon1/ark-docker",
 							Tag:        "v1",
@@ -133,7 +133,7 @@ var _ = Describe("ArkCluster Controller", func() {
 				Name: resourceName + "-arkmanager-cfg", Namespace: namespace,
 			}, cm)).To(Succeed())
 
-			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_clusterid=kubicarkcluster"))
+			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_clusterid=test-cluster"))
 			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_ActiveEvent=Summer"))
 			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkflag_crossplay=true"))
 		})
@@ -150,7 +150,7 @@ var _ = Describe("ArkCluster Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Name: resourceName + "-arkmanager-cfg", Namespace: namespace,
 			}, cm)).To(Succeed())
-			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_clusterid=kubicarkcluster"))
+			Expect(cm.Data[arkManagerCfgKey]).To(ContainSubstring("arkopt_clusterid=test-cluster"))
 		})
 	})
 })

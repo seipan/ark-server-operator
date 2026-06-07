@@ -69,7 +69,6 @@ func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		buildGlobalGameUserSettingsIniConfigMap(&cluster),
 		buildPlayerListsConfigMap(&cluster),
 	}
-
 	for _, cm := range desired {
 		if cm == nil {
 			continue
