@@ -56,6 +56,41 @@ func playerListsConfigMapName(c *arkv1.ArkCluster) string {
 	return c.Name + "-player-lists"
 }
 
+func SharedStoragePVCName(c *arkv1.ArkCluster) string {
+	return c.Name + "-shared"
+}
+
+// buildSharedStoragePVC returns the desired PVC for cluster-travel storage.
+// Returns nil when spec.sharedStorage.existingClaimName is set — in that case
+// the operator does not own the PVC and only validates its existence at apply time.
+func buildSharedStoragePVC(c *arkv1.ArkCluster) *corev1.PersistentVolumeClaim {
+	ss := c.Spec.SharedStorage
+	if ss.ExistingClaimName != "" {
+		return nil
+	}
+	spec := corev1.PersistentVolumeClaimSpec{
+		AccessModes: ss.AccessModes,
+	}
+	if ss.StorageClassName != "" {
+		spec.StorageClassName = &ss.StorageClassName
+	}
+	if ss.Size != nil {
+		spec.Resources = corev1.VolumeResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceStorage: *ss.Size,
+			},
+		}
+	}
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SharedStoragePVCName(c),
+			Namespace: c.Namespace,
+			Labels:    ClusterLabels(c, ComponentSharedStorage),
+		},
+		Spec: spec,
+	}
+}
+
 // buildArkManagerCfgConfigMap renders the arkmanager.cfg ConfigMap.
 func buildArkManagerCfgConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
 	return &corev1.ConfigMap{

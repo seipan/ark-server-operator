@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	arkv1 "github.com/seipan/ark-server-operator/api/v1"
@@ -140,6 +142,52 @@ func TestBuildPlayerListsConfigMap_EmptyListsStillProduceKeys(t *testing.T) {
 		if _, ok := cm.Data[key]; !ok {
 			t.Errorf("player-lists ConfigMap missing data key %q", key)
 		}
+	}
+}
+
+func TestBuildSharedStoragePVC_NilWhenExistingClaim(t *testing.T) {
+	c := newClusterForRender()
+	c.Spec.SharedStorage = arkv1.SharedStorageSpec{
+		ExistingClaimName: "ark-shared",
+		MountPath:         "/ark-shared",
+	}
+
+	if buildSharedStoragePVC(c) != nil {
+		t.Errorf("expected nil when existingClaimName is set")
+	}
+}
+
+func TestBuildSharedStoragePVC_FromSpec(t *testing.T) {
+	c := newClusterForRender()
+	size := resource.MustParse("5Gi")
+	c.Spec.SharedStorage = arkv1.SharedStorageSpec{
+		StorageClassName: "nfs",
+		Size:             &size,
+		AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		MountPath:        "/ark-shared",
+	}
+
+	pvc := buildSharedStoragePVC(c)
+	if pvc == nil {
+		t.Fatalf("expected PVC, got nil")
+	}
+	if pvc.Name != "test-shared" {
+		t.Errorf("PVC name = %q, want %q", pvc.Name, "test-shared")
+	}
+	if pvc.Namespace != "ark" {
+		t.Errorf("PVC namespace = %q, want ark", pvc.Namespace)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "nfs" {
+		t.Errorf("StorageClassName = %v, want nfs", pvc.Spec.StorageClassName)
+	}
+	if got, want := pvc.Spec.Resources.Requests[corev1.ResourceStorage], size; got.Cmp(want) != 0 {
+		t.Errorf("size request = %v, want %v", got.String(), want.String())
+	}
+	if len(pvc.Spec.AccessModes) != 1 || pvc.Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Errorf("access modes = %v, want [ReadWriteMany]", pvc.Spec.AccessModes)
+	}
+	if pvc.Labels[LabelComponent] != ComponentSharedStorage {
+		t.Errorf("component label = %q, want %q", pvc.Labels[LabelComponent], ComponentSharedStorage)
 	}
 }
 

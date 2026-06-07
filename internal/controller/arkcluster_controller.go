@@ -33,14 +33,12 @@ import (
 
 // ArkClusterReconciler reconciles a ArkCluster object.
 //
-// Current scope (Phase 1 MVP, ConfigMap-only step):
-//   - Renders arkmanager.cfg into a ConfigMap
-//   - Materializes spec.game / spec.gameUserSettings inline contents into ConfigMaps
-//     (configMapRef inputs are left for downstream consumers to reference directly)
-//   - Renders spec.playerLists into a single ConfigMap with three text-file keys
+// Current scope (Phase 1 MVP):
+//   - Renders arkmanager.cfg / Global ini / player-lists ConfigMaps
+//   - Reconciles the cluster-travel shared PVC (or validates an existing claim)
 //
-// Out of scope for this step (tracked separately): shared PVC reconciliation,
-// passwords Secret validation, status conditions, backup CronJob.
+// Out of scope for this step (tracked separately): passwords Secret validation,
+// status conditions, backup CronJob, ArkServer counting.
 type ArkClusterReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -50,6 +48,7 @@ type ArkClusterReconciler struct {
 // +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile renders the operator-managed ConfigMaps for the named ArkCluster.
 func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -82,6 +81,17 @@ func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			log.Info("reconciled ConfigMap", "name", cm.Name, "operation", op)
 		}
 	}
+
+	if pvc := buildSharedStoragePVC(&cluster); pvc != nil {
+		op, err := r.applySharedPVC(ctx, &cluster, pvc)
+		if err != nil {
+			log.Error(err, "reconcile shared PVC", "name", pvc.Name)
+			return ctrl.Result{}, err
+		}
+		if op != controllerutil.OperationResultNone {
+			log.Info("reconciled shared PVC", "name", pvc.Name, "operation", op)
+		}
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -100,10 +110,34 @@ func (r *ArkClusterReconciler) applyConfigMap(ctx context.Context, cluster *arkv
 	})
 }
 
+// applySharedPVC creates the cluster-travel PVC or, for an existing one, reconciles
+// only the fields K8s allows to mutate post-bind. AccessModes / StorageClassName /
+// VolumeName are immutable after creation; Resources.Requests can be expanded if
+// the bound StorageClass permits.
+func (r *ArkClusterReconciler) applySharedPVC(ctx context.Context, cluster *arkv1.ArkCluster, desired *corev1.PersistentVolumeClaim) (controllerutil.OperationResult, error) {
+	target := &corev1.PersistentVolumeClaim{}
+	target.Name = desired.Name
+	target.Namespace = desired.Namespace
+
+	return controllerutil.CreateOrUpdate(ctx, r.Client, target, func() error {
+		target.Labels = desired.Labels
+		if target.CreationTimestamp.IsZero() {
+			target.Spec = desired.Spec
+		} else {
+			target.Spec.Resources = desired.Spec.Resources
+		}
+		if err := controllerutil.SetControllerReference(cluster, target, r.Scheme); err != nil {
+			return fmt.Errorf("set owner ref on %s: %w", desired.Name, err)
+		}
+		return nil
+	})
+}
+
 func (r *ArkClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&arkv1.ArkCluster{}).
 		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
 		Named("arkcluster").
 		Complete(r)
 }
