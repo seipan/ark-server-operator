@@ -62,7 +62,7 @@ func buildArkManagerCfgConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      arkManagerCfgConfigMapName(c),
 			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
+			Labels:    ClusterLabels(c, ComponentConfig),
 		},
 		Data: map[string]string{
 			arkManagerCfgKey: renderArkManagerCfg(c),
@@ -81,7 +81,7 @@ func buildGlobalGameIniConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      globalGameIniConfigMapName(c),
 			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
+			Labels:    ClusterLabels(c, ComponentConfig),
 		},
 		Data: map[string]string{
 			globalGameIniKey: c.Spec.Game.Inline,
@@ -99,7 +99,7 @@ func buildGlobalGameUserSettingsIniConfigMap(c *arkv1.ArkCluster) *corev1.Config
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      globalGameUserSettingsConfigMapName(c),
 			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
+			Labels:    ClusterLabels(c, ComponentConfig),
 		},
 		Data: map[string]string{
 			globalGameUserSettingsIniKey: c.Spec.GameUserSettings.Inline,
@@ -116,7 +116,7 @@ func buildPlayerListsConfigMap(c *arkv1.ArkCluster) *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      playerListsConfigMapName(c),
 			Namespace: c.Namespace,
-			Labels:    managedLabels(c),
+			Labels:    ClusterLabels(c, ComponentConfig),
 		},
 		Data: map[string]string{
 			allowedCheatersKey:   strings.Join(pl.AllowedCheaters, "\n"),
@@ -134,7 +134,6 @@ func renderArkManagerCfg(c *arkv1.ArkCluster) string {
 	var b strings.Builder
 	s := c.Spec.ArkManager
 
-	// Tell arkmanager where the operator-merged ini files land inside the Pod.
 	b.WriteString("arkGameUserSettingsIniFile=/ark/MergedGameUserSettings.ini\n")
 	b.WriteString("arkGameIniFile=/ark/MergedGame.ini\n")
 
@@ -149,7 +148,6 @@ func renderArkManagerCfg(c *arkv1.ArkCluster) string {
 	writeMsg(&b, "msgWarnShutdownMinutes", s.Messages.WarnShutdownMinutes)
 	writeMsg(&b, "msgWarnShutdownSeconds", s.Messages.WarnShutdownSeconds)
 
-	// Per-ArkServer values are envsubst-resolved at Pod start.
 	b.WriteString("serverMap=${SERVERMAP}\n")
 	b.WriteString("ark_SessionName=${SESSIONNAME}\n")
 	b.WriteString("ark_Port=${STEAMPORT}\n")
@@ -206,11 +204,3 @@ func writeFlag(b *strings.Builder, key string, v *bool) {
 	fmt.Fprintf(b, "%s=%s\n", key, boolStr(*v))
 }
 
-// managedLabels are stamped on every ConfigMap the reconciler creates so
-// operators can grep with kubectl -l.
-func managedLabels(c *arkv1.ArkCluster) map[string]string {
-	return map[string]string{
-		"app.kubernetes.io/managed-by": "ark-server-operator",
-		"app.kubernetes.io/part-of":    c.Name,
-	}
-}
