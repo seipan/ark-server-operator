@@ -34,11 +34,6 @@ import (
 	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
-// missingRefRequeueAfter is the polling interval used when ArkCluster references
-// an out-of-band resource (Secret / user-provided ConfigMap / pre-bound PVC) that
-// is not yet present. Periodic polling avoids exponential controller-runtime
-// backoff so the moment the operator creates the missing resource the cluster
-// recovers within at most this interval.
 const missingRefRequeueAfter = 30 * time.Second
 
 // ArkClusterReconciler reconciles a ArkCluster object.
