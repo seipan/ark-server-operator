@@ -70,18 +70,9 @@ func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var obs reconcileObservation
 
-	if err := r.reconcileConfigMaps(ctx, &cluster); err != nil {
-		log.Error(err, "ConfigMap reconciliation")
-		obs.configsErr = err
-	}
-	if err := r.reconcileSharedPVC(ctx, &cluster); err != nil {
-		log.Error(err, "shared PVC reconciliation")
-		obs.pvcApplyErr = err
-	}
-	obs.pvcBound, obs.pvcGetErr = r.probeSharedPVCBound(ctx, &cluster)
-	if obs.pvcGetErr != nil {
-		log.Info("shared PVC lookup", "error", obs.pvcGetErr.Error())
-	}
+	// ---- Observe external inputs ----
+	// Read user-managed dependencies (Secret, user-provided ConfigMaps).
+	// These do not gate the apply step; we surface their state in the final status.
 	if err, keyMissing := r.validatePasswordsSecret(ctx, &cluster); err != nil {
 		log.Info("passwords Secret validation", "error", err.Error())
 		obs.secretErr = err
@@ -92,6 +83,28 @@ func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		obs.refErr = err
 		obs.refKeyMissing = keyMissing
 	}
+
+	// ---- Act: reconcile owned resources ----
+	// Each apply records its own error; we keep going so the status reflects the
+	// full picture even when an early step fails.
+	if err := r.reconcileConfigMaps(ctx, &cluster); err != nil {
+		log.Error(err, "ConfigMap reconciliation")
+		obs.configsErr = err
+	}
+	if err := r.reconcileSharedPVC(ctx, &cluster); err != nil {
+		log.Error(err, "shared PVC reconciliation")
+		obs.pvcApplyErr = err
+	}
+
+	// ---- Observe the result of our own action ----
+	// The shared PVC's Bound phase is async — driven by the StorageClass's
+	// provisioner — so this probe must run after the apply step.
+	obs.pvcBound, obs.pvcGetErr = r.probeSharedPVCBound(ctx, &cluster)
+	if obs.pvcGetErr != nil {
+		log.Info("shared PVC lookup", "error", obs.pvcGetErr.Error())
+	}
+
+	// ---- Report ----
 	if err := r.writeStatus(ctx, &cluster, obs); err != nil {
 		log.Error(err, "status update")
 		return ctrl.Result{}, err
