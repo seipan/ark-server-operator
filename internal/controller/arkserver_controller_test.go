@@ -51,7 +51,17 @@ var _ = Describe("ArkServer Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: arkv1.ArkServerSpec{
+						ClusterRef:  arkv1.ClusterReference{Name: "parent-cluster"},
+						Map:         arkv1.MapTheIsland,
+						SessionName: "test-resource",
+						Ports: arkv1.PortsSpec{
+							Client: 31001,
+							Game:   31002,
+							Query:  31003,
+							RCON:   31004,
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

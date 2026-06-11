@@ -11,13 +11,34 @@ spec:
     kind: ArkServer
     listKind: ArkServerList
     plural: arkservers
+    shortNames:
+    - arks
     singular: arkserver
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef.name
+      name: Cluster
+      type: string
+    - jsonPath: .spec.map
+      name: Map
+      type: string
+    - jsonPath: .spec.desiredState
+      name: Desired
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
-        description: ArkServer is the Schema for the arkservers API
+        description: ArkServer is the Schema for the arkservers API.
         properties:
           apiVersion:
             description: |-
@@ -39,25 +60,239 @@ spec:
           spec:
             description: spec defines the desired state of ArkServer
             properties:
-              foo:
-                description: foo is an example field of ArkServer. Edit arkserver_types.go
-                  to remove/update
+              clusterRef:
+                description: |-
+                  ClusterRef points at the ArkCluster (in the same namespace) that owns
+                  the shared configuration used by this server.
+                properties:
+                  name:
+                    description: Name of the parent ArkCluster.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              desiredState:
+                default: Running
+                description: |-
+                  DesiredState drives the per-server state machine.
+                    Running     — StatefulSet has 1 replica, PVC retained.
+                    Stopped     — StatefulSet scaled to 0, PVC retained (manual stop).
+                    Hibernated  — Same effect as Stopped; reserved for future
+                                  auto-hibernation (Phase 3) when no players are online.
+                    Wiped       — StatefulSet deleted and PVC removed via a finalizer
+                                  that takes a final backup before allowing removal.
+                enum:
+                - Running
+                - Stopped
+                - Hibernated
+                - Wiped
                 type: string
+              map:
+                description: |-
+                  Map is the ARK map this server runs. One of the operator's known map
+                  enum values. For maps that the operator does not enumerate (newer
+                  DLCs), leave this empty and set MapOverride instead.
+                  Exactly one of Map or MapOverride must be set; webhook enforcement is
+                  planned. The renderer maps the chosen value to the SERVERMAP env var.
+                enum:
+                - TheIsland
+                - TheCenter
+                - ScorchedEarth_P
+                - Ragnarok
+                - Aberration_P
+                - Extinction
+                - Valguero_P
+                - Genesis
+                - Gen2
+                - CrystalIsles
+                - LostIsland
+                - Fjordur
+                type: string
+              mapOverride:
+                description: |-
+                  MapOverride accepts an arbitrary SERVERMAP string for ARK maps that
+                  are not yet in the Map enum. Mutually exclusive with Map.
+                maxLength: 64
+                minLength: 1
+                type: string
+              overrideGame:
+                description: |-
+                  OverrideGame is the per-map delta appended to Game.ini at Pod startup.
+                  Concatenated with the cluster's Game.ini source by the init step.
+                type: string
+              overrideGameUserSettings:
+                description: |-
+                  OverrideGameUserSettings is the per-map delta appended to
+                  GameUserSettings.ini at Pod startup. Typical content is the
+                  [MessageOfTheDay] block.
+                type: string
+              ports:
+                description: |-
+                  Ports defines the four NodePort numbers exposed by the server Service.
+                  Phase 1 requires the operator to specify all four; a Phase 2 defaulting
+                  webhook will allow omitting Ports and assigning a contiguous block
+                  automatically.
+                properties:
+                  client:
+                    description: Client is the UDP port for game client connections.
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  game:
+                    description: |-
+                      Game is the UDP port for raw ARK server traffic.
+                      Renders as ark_Port in arkmanager.cfg.
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  query:
+                    description: |-
+                      Query is the UDP port for Steam server-browser queries.
+                      Renders as ark_QueryPort in arkmanager.cfg.
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  rcon:
+                    description: |-
+                      RCON is the TCP port for remote admin console.
+                      Renders as ark_RCONPort in arkmanager.cfg. Service must NOT expose
+                      this externally beyond the cluster network.
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                required:
+                - client
+                - game
+                - query
+                - rcon
+                type: object
+              resources:
+                description: |-
+                  Resources overrides the operator-default container resource requirements.
+                  Operator defaults are pinned in Go constants and applied when this field
+                  is omitted (requests cpu=350m, memory=7.25Gi; limits cpu=2000m, memory=10Gi
+                  matching the legacy KubicArk numbers).
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              sessionName:
+                description: |-
+                  SessionName is the in-game server name visible to players.
+                  Special characters should go in OverrideGameUserSettings instead, per
+                  the arkmanager.cfg comment in the original KubicArk config.
+                maxLength: 128
+                minLength: 1
+                type: string
+              storage:
+                description: |-
+                  Storage configures the per-map PVC that holds the ARK server install
+                  and the SavedArks/* save files. Omit to use operator defaults.
+                properties:
+                  accessModes:
+                    description: |-
+                      AccessModes for the per-map PVC. Defaults to [ReadWriteOnce].
+                      Multi-node access is not required; a single Pod (the StatefulSet
+                      replica) mounts this volume.
+                    items:
+                      type: string
+                    type: array
+                  size:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Size of the per-map PVC.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  storageClassName:
+                    description: |-
+                      StorageClassName for the per-map PVC. If empty, the cluster's default
+                      StorageClass is used.
+                    type: string
+                type: object
+            required:
+            - clusterRef
+            - ports
+            - sessionName
             type: object
           status:
             description: status defines the observed state of ArkServer
             properties:
+              clusterName:
+                description: |-
+                  ClusterName is the resolved name of the parent ArkCluster (cached from
+                  spec.clusterRef.name for easy printcolumn display).
+                type: string
               conditions:
                 description: |-
-                  conditions represent the current state of the ArkServer resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  Conditions follow standard Kubernetes condition semantics.
+                  Known types (Phase 1):
+                    Ready            — overall readiness (Pod up, PVC bound, cluster ref valid)
+                    ClusterRefValid  — spec.clusterRef points at an existing ArkCluster
+                    StatefulSetReady — STS replica is in Running with all containers ready
+                    PVCReady         — per-map PVC is in Bound phase
+                  Known types (Phase 2+):
+                    GameReady        — RCON probe succeeds; the in-game server accepts players
+                    BackupHealthy    — most recent ArkBackup succeeded within expected window
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,6 +351,34 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastReconcileTime:
+                description: LastReconcileTime is the timestamp of the most recent
+                  reconcile pass.
+                format: date-time
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle stage.
+                enum:
+                - Pending
+                - Provisioning
+                - Running
+                - Stopped
+                - Wiping
+                - Failed
+                type: string
+              podName:
+                description: |-
+                  PodName is the name of the (single) StatefulSet pod, conventionally
+                  "<arkserver.name>-0".
+                type: string
+              pvcReady:
+                description: PVCReady is true when the per-map PVC is in Bound phase.
+                type: boolean
+              statefulSetReady:
+                description: |-
+                  StatefulSetReady is true when the StatefulSet's single replica is in
+                  Running state with all containers ready.
+                type: boolean
             type: object
         required:
         - spec
