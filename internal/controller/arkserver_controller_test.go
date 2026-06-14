@@ -25,6 +25,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -232,6 +233,143 @@ var _ = Describe("ArkServer Controller", func() {
 				Name: serverName, Namespace: namespace,
 			}, sts)).To(Succeed())
 			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
+		})
+
+		It("writes status conditions and caches clusterName on first reconcile", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+
+			Expect(server.Status.LastReconcileTime).NotTo(BeNil())
+			Expect(server.Status.ClusterName).To(Equal(parentName))
+			Expect(server.Status.PodName).To(Equal(serverName + "-0"))
+			Expect(server.Status.StatefulSetReady).To(BeFalse())
+			Expect(server.Status.PVCReady).To(BeFalse())
+
+			ref := meta.FindStatusCondition(server.Status.Conditions, ArkServerConditionClusterRefValid)
+			Expect(ref).NotTo(BeNil())
+			Expect(ref.Status).To(Equal(metav1.ConditionTrue))
+			Expect(ref.Reason).To(Equal(ArkServerReasonClusterRefResolved))
+
+			pvc := meta.FindStatusCondition(server.Status.Conditions, ArkServerConditionPVCReady)
+			Expect(pvc).NotTo(BeNil())
+			Expect(pvc.Status).To(Equal(metav1.ConditionFalse))
+			Expect(pvc.Reason).To(Equal(ArkServerReasonPVCPending))
+
+			ready := meta.FindStatusCondition(server.Status.Conditions, ArkServerConditionReady)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+			Expect(server.Status.Phase).To(Equal(arkv1.PhaseProvisioning))
+		})
+
+		It("flips ClusterRefValid to False when clusterRef is changed after creation", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("mutating spec.clusterRef.name to a different value")
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+			server.Spec.ClusterRef.Name = "different-cluster"
+			Expect(k8sClient.Update(ctx, server)).To(Succeed())
+
+			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+
+			ref := meta.FindStatusCondition(server.Status.Conditions, ArkServerConditionClusterRefValid)
+			Expect(ref).NotTo(BeNil())
+			Expect(ref.Status).To(Equal(metav1.ConditionFalse))
+			Expect(ref.Reason).To(Equal(ArkServerReasonClusterRefChangeForbidden))
+			Expect(ref.Message).To(ContainSubstring("clusterRef cannot change after creation"))
+
+			Expect(server.Status.Phase).To(Equal(arkv1.PhaseFailed))
+		})
+
+		It("reports ClusterRefNotFound when the parent ArkCluster disappears", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			cluster := &arkv1.ArkCluster{}
+			Expect(k8sClient.Get(ctx, parentNN, cluster)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, cluster)).To(Succeed())
+
+			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+
+			ref := meta.FindStatusCondition(server.Status.Conditions, ArkServerConditionClusterRefValid)
+			Expect(ref).NotTo(BeNil())
+			Expect(ref.Status).To(Equal(metav1.ConditionFalse))
+			Expect(ref.Reason).To(Equal(ArkServerReasonClusterRefNotFound))
+			Expect(server.Status.Phase).To(Equal(arkv1.PhaseFailed))
+		})
+
+		It("reports Phase=Stopped and StatefulSetReady=ScaledToZero when desiredState is Stopped", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+			server.Spec.DesiredState = arkv1.StateStopped
+			Expect(k8sClient.Update(ctx, server)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+			Expect(server.Status.Phase).To(Equal(arkv1.PhaseStopped))
+
+			sts := meta.FindStatusCondition(server.Status.Conditions, ArkServerConditionStatefulSetReady)
+			Expect(sts).NotTo(BeNil())
+			Expect(sts.Status).To(Equal(metav1.ConditionFalse))
+			Expect(sts.Reason).To(Equal(ArkServerReasonScaledToZero))
+		})
+
+		It("reports Phase=Running and Ready=True when STS and PVC are fully bound", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("manually marking the PVC Bound (envtest has no provisioner)")
+			pvc := &corev1.PersistentVolumeClaim{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: serverName + "-data", Namespace: namespace,
+			}, pvc)).To(Succeed())
+			pvc.Status.Phase = corev1.ClaimBound
+			Expect(k8sClient.Status().Update(ctx, pvc)).To(Succeed())
+
+			By("manually marking the STS ready (envtest has no kubelet)")
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: serverName, Namespace: namespace,
+			}, sts)).To(Succeed())
+			sts.Status.ReadyReplicas = 1
+			sts.Status.Replicas = 1
+			Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+
+			Expect(server.Status.Phase).To(Equal(arkv1.PhaseRunning))
+
+			ready := meta.FindStatusCondition(server.Status.Conditions, ArkServerConditionReady)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+			Expect(ready.Reason).To(Equal(ArkServerReasonAllSubresourcesReady))
 		})
 
 		It("returns RequeueAfter when the parent ArkCluster is missing", func() {
