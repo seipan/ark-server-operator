@@ -108,6 +108,48 @@ func TestResolveServerMap_FallsBackToEnum(t *testing.T) {
 	}
 }
 
+func TestResolveReplicas(t *testing.T) {
+	cases := []struct {
+		state arkv1.ArkServerDesiredState
+		want  int32
+	}{
+		{arkv1.StateRunning, 1},
+		{arkv1.StateStopped, 0},
+		{arkv1.StateHibernated, 0},
+		{arkv1.StateWiped, 1}, // PR3 will replace this with deletion path
+		{"", 1},               // empty falls back to Running
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.state), func(t *testing.T) {
+			s := newServerForRender()
+			s.Spec.DesiredState = tc.state
+			if got := resolveReplicas(s); got != tc.want {
+				t.Errorf("resolveReplicas(%q) = %d, want %d", tc.state, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildStatefulSet_StoppedHasZeroReplicas(t *testing.T) {
+	s := newServerForRender()
+	p := newResolvedParentForServer(t)
+
+	s.Spec.DesiredState = arkv1.StateStopped
+	if got := *buildStatefulSet(s, p).Spec.Replicas; got != 0 {
+		t.Errorf("Stopped replicas = %d, want 0", got)
+	}
+
+	s.Spec.DesiredState = arkv1.StateHibernated
+	if got := *buildStatefulSet(s, p).Spec.Replicas; got != 0 {
+		t.Errorf("Hibernated replicas = %d, want 0", got)
+	}
+
+	s.Spec.DesiredState = arkv1.StateRunning
+	if got := *buildStatefulSet(s, p).Spec.Replicas; got != 1 {
+		t.Errorf("Running replicas = %d, want 1", got)
+	}
+}
+
 func TestMergeIni(t *testing.T) {
 	cases := []struct {
 		name           string
