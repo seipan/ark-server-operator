@@ -50,8 +50,6 @@ type ArkServerSpec struct {
 	MapOverride string `json:"mapOverride,omitempty"`
 
 	// SessionName is the in-game server name visible to players.
-	// Special characters should go in OverrideGameUserSettings instead, per
-	// the arkmanager.cfg comment in the original KubicArk config.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	// +required
@@ -77,9 +75,6 @@ type ArkServerSpec struct {
 	Ports PortsSpec `json:"ports"`
 
 	// Resources overrides the operator-default container resource requirements.
-	// Operator defaults are pinned in Go constants and applied when this field
-	// is omitted (requests cpu=350m, memory=7.25Gi; limits cpu=2000m, memory=10Gi
-	// matching the legacy KubicArk numbers).
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
@@ -139,20 +134,6 @@ const (
 	StateWiped      ArkServerDesiredState = "Wiped"
 )
 
-// PortsSpec carries the four NodePort numbers the ARK Service exposes.
-//
-// All four ports must fall within the standard NodePort range (30000-32767)
-// because the Service is type=NodePort — LoadBalancers are intentionally
-// avoided per the project README (UDP support is patchy).
-//
-// Renamed from the original KubicArk env names for clarity:
-//
-//	KubicArk env    ArkServer field   arkmanager.cfg key
-//	-----------     ---------------   ---------------------
-//	(client)        Client            (UDP client connection)
-//	STEAMPORT       Game              ark_Port
-//	SERVERPORT      Query             ark_QueryPort
-//	RCONPORT        RCON              ark_RCONPort
 type PortsSpec struct {
 	// Client is the UDP port for game client connections.
 	// +kubebuilder:validation:Minimum=30000
@@ -190,10 +171,6 @@ type PortsSpec struct {
 //   - save files in SavedArks/* (a few hundred MB to several GiB on
 //     long-running servers)
 //   - the SteamCMD update working area
-//
-// Operator default Size is 30Gi, which fits a normal-play scenario. Heavily
-// modded or multi-year servers should bump this (KubicArk's original choice
-// was 100Gi).
 type ArkServerStorageSpec struct {
 	// Size of the per-map PVC.
 	// +optional

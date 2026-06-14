@@ -50,9 +50,6 @@ const (
 	ComponentBackup        = "backup"
 )
 
-// ClusterLabels returns the label set stamped on every resource owned by an
-// ArkCluster. The component argument differentiates resources of different
-// roles (e.g. ConfigMaps are "config", the shared PVC is "shared-storage").
 func ClusterLabels(c *arkv1.ArkCluster, component string) map[string]string {
 	return map[string]string{
 		LabelName:       AppNameArkCluster,
@@ -61,5 +58,29 @@ func ClusterLabels(c *arkv1.ArkCluster, component string) map[string]string {
 		LabelManagedBy:  ManagedByValue,
 		LabelComponent:  component,
 		LabelClusterRef: c.Name,
+	}
+}
+
+func ServerLabels(s *arkv1.ArkServer, clusterName, mapName, component string) map[string]string {
+	labels := map[string]string{
+		LabelName:       AppNameArkServer,
+		LabelInstance:   s.Name,
+		LabelPartOf:     PartOfValue,
+		LabelManagedBy:  ManagedByValue,
+		LabelComponent:  component,
+		LabelClusterRef: clusterName,
+		LabelServerRef:  s.Name,
+	}
+	if mapName != "" {
+		labels[LabelMap] = mapName
+	}
+	return labels
+}
+
+func ServerSelectorLabels(s *arkv1.ArkServer) map[string]string {
+	return map[string]string{
+		LabelName:      AppNameArkServer,
+		LabelInstance:  s.Name,
+		LabelManagedBy: ManagedByValue,
 	}
 }
