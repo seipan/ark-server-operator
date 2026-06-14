@@ -26,18 +26,12 @@ import (
 	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
-// Condition types stamped on ArkCluster.Status.Conditions.
-// The set matches the design doc (§3 "status shape"):
-//   Ready              — overall readiness
-//   ConfigsApplied     — operator-managed ConfigMaps reconciled to desired state
-//   SharedStorageBound — cluster-travel PVC is Bound
 const (
 	ConditionReady              = "Ready"
 	ConditionConfigsApplied     = "ConfigsApplied"
 	ConditionSharedStorageBound = "SharedStorageBound"
 )
 
-// Condition reasons surfaced in kubectl describe and events.
 const (
 	ReasonReconciled                = "Reconciled"
 	ReasonReconcileFailed           = "ReconcileFailed"
@@ -51,36 +45,16 @@ const (
 	ReasonSubresourcesNotReady      = "SubresourcesNotReady"
 )
 
-// reconcileObservation aggregates the outcome of each reconcile substep so the
-// final status update has a single source of truth.
 type reconcileObservation struct {
-	// configsErr is non-nil if any operator-managed ConfigMap failed to apply.
-	configsErr error
-	// pvcApplyErr is non-nil if the shared PVC create/update failed.
-	pvcApplyErr error
-	// pvcBound reports whether the cluster-travel PVC (operator-managed or
-	// existing) is in Bound phase.
-	pvcBound bool
-	// pvcGetErr is non-nil if the bound-status probe failed (e.g. an
-	// existingClaimName points at a missing PVC).
-	pvcGetErr error
-	// secretErr is non-nil when the passwords Secret is missing or lacks a
-	// required key. Not fatal; surfaced in conditions for operator follow-up.
-	secretErr error
-	// secretKeyMissing distinguishes "secret not found" from "secret found,
-	// key inside it missing" for a more precise condition reason.
+	pvcApplyErr      error
+	pvcBound         bool
+	pvcGetErr        error
+	secretErr        error
 	secretKeyMissing bool
-	// refErr is non-nil when an inline-replacing configMapRef is missing or
-	// lacks the requested key.
-	refErr error
-	// refKeyMissing distinguishes "ConfigMap not found" from "ConfigMap found,
-	// key missing".
-	refKeyMissing bool
+	refErr           error
+	refKeyMissing    bool
 }
 
-// setCondition is a thin wrapper around meta.SetStatusCondition that stamps the
-// generation observed at write time so consumers can tell whether the status
-// reflects the current spec.
 func setCondition(c *arkv1.ArkCluster, condType string, status metav1.ConditionStatus, reason, message string) {
 	meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
 		Type:               condType,
@@ -91,35 +65,24 @@ func setCondition(c *arkv1.ArkCluster, condType string, status metav1.ConditionS
 	})
 }
 
-// writeStatus computes Conditions + scalar status fields from the substep
-// observation and persists the result via the /status subresource.
 func (r *ArkClusterReconciler) writeStatus(ctx context.Context, c *arkv1.ArkCluster, obs reconcileObservation) error {
 	now := metav1.Now()
 	c.Status.LastReconcileTime = &now
 	c.Status.ImageDigest = c.Spec.Image.Digest
 
-	// ConfigsApplied: True only if both the apply step and the referenced
-	// configMapRef validation succeeded.
-	switch {
-	case obs.configsErr != nil:
-		setCondition(c, ConditionConfigsApplied, metav1.ConditionFalse,
-			ReasonReconcileFailed, obs.configsErr.Error())
-		c.Status.GlobalConfigMapsReady = false
-	case obs.refErr != nil:
+	if obs.refErr != nil {
 		reason := ReasonReferencedCMNotFound
 		if obs.refKeyMissing {
 			reason = ReasonReferencedCMKeyMissing
 		}
-		setCondition(c, ConditionConfigsApplied, metav1.ConditionFalse,
-			reason, obs.refErr.Error())
+		setCondition(c, ConditionConfigsApplied, metav1.ConditionFalse, reason, obs.refErr.Error())
 		c.Status.GlobalConfigMapsReady = false
-	default:
+	} else {
 		setCondition(c, ConditionConfigsApplied, metav1.ConditionTrue,
-			ReasonReconciled, "All operator-managed ConfigMaps applied and references resolved")
+			ReasonReconciled, "Referenced ConfigMaps resolved")
 		c.Status.GlobalConfigMapsReady = true
 	}
 
-	// SharedStorageBound: True only when the PVC is observable AND Bound.
 	switch {
 	case obs.pvcApplyErr != nil:
 		setCondition(c, ConditionSharedStorageBound, metav1.ConditionFalse,
@@ -139,9 +102,7 @@ func (r *ArkClusterReconciler) writeStatus(ctx context.Context, c *arkv1.ArkClus
 		c.Status.SharedStorageReady = true
 	}
 
-	// Ready: aggregate. False if any substep is not happy.
-	ready := obs.configsErr == nil &&
-		obs.pvcApplyErr == nil && obs.pvcGetErr == nil && obs.pvcBound &&
+	ready := obs.pvcApplyErr == nil && obs.pvcGetErr == nil && obs.pvcBound &&
 		obs.secretErr == nil &&
 		obs.refErr == nil
 	if ready {
@@ -155,8 +116,6 @@ func (r *ArkClusterReconciler) writeStatus(ctx context.Context, c *arkv1.ArkClus
 	return r.Status().Update(ctx, c)
 }
 
-// buildNotReadyMessage assembles a human-readable explanation listing every
-// substep that is not yet satisfied. The Ready condition surfaces it.
 func buildNotReadyMessage(obs reconcileObservation) string {
 	var msg string
 	add := func(s string) {
@@ -165,9 +124,6 @@ func buildNotReadyMessage(obs reconcileObservation) string {
 			return
 		}
 		msg += "; " + s
-	}
-	if obs.configsErr != nil {
-		add(fmt.Sprintf("ConfigMaps: %s", obs.configsErr))
 	}
 	if obs.pvcApplyErr != nil {
 		add(fmt.Sprintf("shared PVC apply: %s", obs.pvcApplyErr))

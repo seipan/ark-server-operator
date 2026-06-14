@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -45,18 +44,10 @@ type ArkClusterReconciler struct {
 // +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=ark.yadon3141.com,resources=arkclusters/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
-// Reconcile drives one pass of the ArkCluster control loop.
-//
-// The function never returns early on a substep failure: every substep records
-// its outcome into a reconcileObservation, and the final status update reflects
-// the aggregate state. Genuine controller errors (apply failures) are returned
-// to trigger controller-runtime backoff; "missing referenced resource" cases
-// are signalled via Result.RequeueAfter so the operator can recover quickly
-// once the user applies the missing Secret or ConfigMap.
 func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -70,9 +61,6 @@ func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var obs reconcileObservation
 
-	// ---- Observe external inputs ----
-	// Read user-managed dependencies (Secret, user-provided ConfigMaps).
-	// These do not gate the apply step; we surface their state in the final status.
 	if err, keyMissing := r.validatePasswordsSecret(ctx, &cluster); err != nil {
 		log.Info("passwords Secret validation", "error", err.Error())
 		obs.secretErr = err
@@ -84,34 +72,23 @@ func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		obs.refKeyMissing = keyMissing
 	}
 
-	// ---- Act: reconcile owned resources ----
-	// Each apply records its own error; we keep going so the status reflects the
-	// full picture even when an early step fails.
-	if err := r.reconcileConfigMaps(ctx, &cluster); err != nil {
-		log.Error(err, "ConfigMap reconciliation")
-		obs.configsErr = err
-	}
 	if err := r.reconcileSharedPVC(ctx, &cluster); err != nil {
 		log.Error(err, "shared PVC reconciliation")
 		obs.pvcApplyErr = err
 	}
 
-	// ---- Observe the result of our own action ----
-	// The shared PVC's Bound phase is async — driven by the StorageClass's
-	// provisioner — so this probe must run after the apply step.
 	obs.pvcBound, obs.pvcGetErr = r.probeSharedPVCBound(ctx, &cluster)
 	if obs.pvcGetErr != nil {
 		log.Info("shared PVC lookup", "error", obs.pvcGetErr.Error())
 	}
 
-	// ---- Report ----
 	if err := r.writeStatus(ctx, &cluster, obs); err != nil {
 		log.Error(err, "status update")
 		return ctrl.Result{}, err
 	}
 
-	if fatal := errors.Join(obs.configsErr, obs.pvcApplyErr); fatal != nil {
-		return ctrl.Result{}, fatal
+	if obs.pvcApplyErr != nil {
+		return ctrl.Result{}, obs.pvcApplyErr
 	}
 	if obs.secretErr != nil || obs.refErr != nil || obs.pvcGetErr != nil || !obs.pvcBound {
 		return ctrl.Result{RequeueAfter: missingRefRequeueAfter}, nil
@@ -119,34 +96,6 @@ func (r *ArkClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
-// reconcileConfigMaps applies all four operator-managed ConfigMaps. Returns the
-// first apply failure, or nil if every CM is present at the desired state.
-func (r *ArkClusterReconciler) reconcileConfigMaps(ctx context.Context, cluster *arkv1.ArkCluster) error {
-	log := logf.FromContext(ctx)
-	desired := []*corev1.ConfigMap{
-		buildArkManagerCfgConfigMap(cluster),
-		buildGlobalGameIniConfigMap(cluster),
-		buildGlobalGameUserSettingsIniConfigMap(cluster),
-		buildPlayerListsConfigMap(cluster),
-	}
-	for _, cm := range desired {
-		if cm == nil {
-			continue
-		}
-		op, err := r.applyConfigMap(ctx, cluster, cm)
-		if err != nil {
-			return fmt.Errorf("apply ConfigMap %s: %w", cm.Name, err)
-		}
-		if op != controllerutil.OperationResultNone {
-			log.Info("reconciled ConfigMap", "name", cm.Name, "operation", op)
-		}
-	}
-	return nil
-}
-
-// reconcileSharedPVC creates / updates the operator-managed shared PVC. Returns
-// nil immediately if spec.sharedStorage.existingClaimName is set (the operator
-// does not touch user-owned PVCs).
 func (r *ArkClusterReconciler) reconcileSharedPVC(ctx context.Context, cluster *arkv1.ArkCluster) error {
 	log := logf.FromContext(ctx)
 	pvc := buildSharedStoragePVC(cluster)
@@ -163,8 +112,6 @@ func (r *ArkClusterReconciler) reconcileSharedPVC(ctx context.Context, cluster *
 	return nil
 }
 
-// probeSharedPVCBound returns whether the cluster-travel PVC (operator-managed
-// or user-supplied via existingClaimName) is in Bound phase.
 func (r *ArkClusterReconciler) probeSharedPVCBound(ctx context.Context, cluster *arkv1.ArkCluster) (bool, error) {
 	name := SharedStoragePVCName(cluster)
 	if cn := cluster.Spec.SharedStorage.ExistingClaimName; cn != "" {
@@ -177,12 +124,6 @@ func (r *ArkClusterReconciler) probeSharedPVCBound(ctx context.Context, cluster 
 	return pvc.Status.Phase == corev1.ClaimBound, nil
 }
 
-// validatePasswordsSecret checks that the Secret referenced by
-// spec.passwords.secretRef exists and carries both expected data keys.
-//
-// Returns (nil, false) on success. On failure returns the error plus a flag
-// distinguishing "secret not found" from "key inside secret missing" so the
-// caller can pick a precise condition Reason.
 func (r *ArkClusterReconciler) validatePasswordsSecret(ctx context.Context, cluster *arkv1.ArkCluster) (error, bool) {
 	ref := cluster.Spec.Passwords.SecretRef
 	if ref.Name == "" {
@@ -210,11 +151,6 @@ func (r *ArkClusterReconciler) validatePasswordsSecret(ctx context.Context, clus
 	return nil, false
 }
 
-// validateIniConfigMapRefs confirms that every IniSource.ConfigMapRef on the
-// spec resolves to a ConfigMap whose data carries the requested key.
-//
-// Returns (nil, false) on success. On failure the second return value flags
-// whether the failure was a missing-key (true) versus a missing-ConfigMap (false).
 func (r *ArkClusterReconciler) validateIniConfigMapRefs(ctx context.Context, cluster *arkv1.ArkCluster) (error, bool) {
 	sources := []struct {
 		field string
@@ -238,27 +174,6 @@ func (r *ArkClusterReconciler) validateIniConfigMapRefs(ctx context.Context, clu
 	return nil, false
 }
 
-// applyConfigMap creates the ConfigMap or updates its data/labels to match the
-// desired state.
-func (r *ArkClusterReconciler) applyConfigMap(ctx context.Context, cluster *arkv1.ArkCluster, desired *corev1.ConfigMap) (controllerutil.OperationResult, error) {
-	target := &corev1.ConfigMap{}
-	target.Name = desired.Name
-	target.Namespace = desired.Namespace
-
-	return controllerutil.CreateOrUpdate(ctx, r.Client, target, func() error {
-		target.Labels = desired.Labels
-		target.Data = desired.Data
-		if err := controllerutil.SetControllerReference(cluster, target, r.Scheme); err != nil {
-			return fmt.Errorf("set owner ref on %s: %w", desired.Name, err)
-		}
-		return nil
-	})
-}
-
-// applySharedPVC creates the cluster-travel PVC or, for an existing one, reconciles
-// only the fields K8s allows to mutate post-bind. AccessModes / StorageClassName /
-// VolumeName are immutable after creation; Resources.Requests can be expanded if
-// the bound StorageClass permits.
 func (r *ArkClusterReconciler) applySharedPVC(ctx context.Context, cluster *arkv1.ArkCluster, desired *corev1.PersistentVolumeClaim) (controllerutil.OperationResult, error) {
 	target := &corev1.PersistentVolumeClaim{}
 	target.Name = desired.Name
@@ -281,7 +196,6 @@ func (r *ArkClusterReconciler) applySharedPVC(ctx context.Context, cluster *arkv
 func (r *ArkClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&arkv1.ArkCluster{}).
-		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Named("arkcluster").
 		Complete(r)

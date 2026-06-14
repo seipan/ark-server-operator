@@ -132,19 +132,6 @@ func TestRenderArkManagerCfg_DefaultMountPath(t *testing.T) {
 	}
 }
 
-func TestBuildPlayerListsConfigMap_EmptyListsStillProduceKeys(t *testing.T) {
-	c := newClusterForRender()
-	c.Spec.PlayerLists = arkv1.PlayerListsSpec{}
-
-	cm := buildPlayerListsConfigMap(c)
-
-	for _, key := range []string{allowedCheatersKey, joinNoCheckKey, exclusiveJoinListKey} {
-		if _, ok := cm.Data[key]; !ok {
-			t.Errorf("player-lists ConfigMap missing data key %q", key)
-		}
-	}
-}
-
 func TestBuildSharedStoragePVC_NilWhenExistingClaim(t *testing.T) {
 	c := newClusterForRender()
 	c.Spec.SharedStorage = arkv1.SharedStorageSpec{
@@ -191,18 +178,3 @@ func TestBuildSharedStoragePVC_FromSpec(t *testing.T) {
 	}
 }
 
-func TestBuildGlobalIni_NilWhenConfigMapRef(t *testing.T) {
-	c := newClusterForRender()
-	c.Spec.Game.Inline = ""
-	c.Spec.Game.ConfigMapRef = &arkv1.IniConfigMapRef{Name: "user-game-ini", Key: "Game.ini"}
-
-	if buildGlobalGameIniConfigMap(c) != nil {
-		t.Errorf("expected nil when game.configMapRef is the source")
-	}
-
-	c.Spec.GameUserSettings.Inline = ""
-	c.Spec.GameUserSettings.ConfigMapRef = &arkv1.IniConfigMapRef{Name: "user-gus", Key: "GameUserSettings.ini"}
-	if buildGlobalGameUserSettingsIniConfigMap(c) != nil {
-		t.Errorf("expected nil when gameUserSettings.configMapRef is the source")
-	}
-}

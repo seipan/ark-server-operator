@@ -9,6 +9,7 @@ rules:
   resources:
   - configmaps
   - persistentvolumeclaims
+  - services
   verbs:
   - create
   - delete
@@ -24,6 +25,18 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ark.yadon3141.com

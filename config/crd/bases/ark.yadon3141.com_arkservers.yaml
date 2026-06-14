@@ -173,11 +173,8 @@ spec:
                 - rcon
                 type: object
               resources:
-                description: |-
-                  Resources overrides the operator-default container resource requirements.
-                  Operator defaults are pinned in Go constants and applied when this field
-                  is omitted (requests cpu=350m, memory=7.25Gi; limits cpu=2000m, memory=10Gi
-                  matching the legacy KubicArk numbers).
+                description: Resources overrides the operator-default container resource
+                  requirements.
                 properties:
                   claims:
                     description: |-
@@ -236,10 +233,7 @@ spec:
                     type: object
                 type: object
               sessionName:
-                description: |-
-                  SessionName is the in-game server name visible to players.
-                  Special characters should go in OverrideGameUserSettings instead, per
-                  the arkmanager.cfg comment in the original KubicArk config.
+                description: SessionName is the in-game server name visible to players.
                 maxLength: 128
                 minLength: 1
                 type: string
