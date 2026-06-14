@@ -18,12 +18,14 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -32,16 +34,6 @@ import (
 	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
-// ArkServerReconciler reconciles a ArkServer object.
-//
-// PR1 scope (Phase 1, Running path only):
-//   - Resolves the parent ArkCluster (and any referenced ini ConfigMaps)
-//   - Generates the rendered-config CM (arkmanager.cfg + merged inis + player lists)
-//   - Creates / updates the per-map PVC, NodePort Service, and StatefulSet
-//
-// Deferred to later PRs: desiredState state machine (PR2), Wiped finalizer
-// (PR3), status conditions and clusterRef immutability check (PR4),
-// ArkCluster.status.managedServers count (PR5).
 type ArkServerReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -56,9 +48,9 @@ type ArkServerReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile drives one pass of the ArkServer control loop.
 func (r *ArkServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
 	var server arkv1.ArkServer
 	if err := r.Get(ctx, req.NamespacedName, &server); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -67,33 +59,103 @@ func (r *ArkServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
+	obs := arkServerObservation{desiredReplicas: resolveReplicas(&server)}
+
+	if cached := server.Status.ClusterName; cached != "" && cached != server.Spec.ClusterRef.Name {
+		obs.clusterRefForbidden = true
+		obs.forbiddenMsg = fmt.Sprintf("clusterRef cannot change after creation (was %q, now %q)",
+			cached, server.Spec.ClusterRef.Name)
+		log.Info("clusterRef change rejected", "was", cached, "now", server.Spec.ClusterRef.Name)
+		if err := r.writeArkServerStatus(ctx, &server, nil, obs); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: missingRefRequeueAfter}, nil
+	}
+
 	parent, err := r.resolveParent(ctx, &server)
 	if err != nil {
-		// Missing parent or unreadable user-supplied CM: poll periodically
-		// without exponential backoff so creation of the missing resource
-		// is picked up within at most missingRefRequeueAfter.
 		log.Info("resolve parent", "error", err.Error())
+		obs.clusterRefErr = err
+		if statusErr := r.writeArkServerStatus(ctx, &server, nil, obs); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: missingRefRequeueAfter}, nil
 	}
 
 	if err := r.applyRenderedConfigCM(ctx, &server, parent); err != nil {
 		log.Error(err, "apply rendered-config CM")
-		return ctrl.Result{}, err
+		obs.configsErr = err
 	}
 	if err := r.applyDataPVC(ctx, &server, parent); err != nil {
 		log.Error(err, "apply data PVC")
-		return ctrl.Result{}, err
+		obs.pvcApplyErr = err
 	}
 	if err := r.applyService(ctx, &server, parent); err != nil {
 		log.Error(err, "apply Service")
-		return ctrl.Result{}, err
+		obs.svcApplyErr = err
 	}
 	if err := r.applyStatefulSet(ctx, &server, parent); err != nil {
 		log.Error(err, "apply StatefulSet")
+		obs.stsApplyErr = err
+	}
+
+	obs.podName, obs.stsReady, obs.stsGetErr = r.probeStatefulSetReady(ctx, &server)
+	if obs.stsGetErr != nil {
+		log.Info("StatefulSet lookup", "error", obs.stsGetErr.Error())
+	}
+	obs.pvcBound, obs.pvcGetErr = r.probeDataPVCBound(ctx, &server)
+	if obs.pvcGetErr != nil {
+		log.Info("data PVC lookup", "error", obs.pvcGetErr.Error())
+	}
+
+	if err := r.writeArkServerStatus(ctx, &server, parent, obs); err != nil {
+		log.Error(err, "status update")
 		return ctrl.Result{}, err
 	}
 
+	if fatal := errors.Join(obs.configsErr, obs.pvcApplyErr, obs.svcApplyErr, obs.stsApplyErr); fatal != nil {
+		return ctrl.Result{}, fatal
+	}
+	if obs.desiredReplicas > 0 && (!obs.stsReady || !obs.pvcBound) {
+		return ctrl.Result{RequeueAfter: missingRefRequeueAfter}, nil
+	}
 	return ctrl.Result{}, nil
+}
+
+// probeStatefulSetReady reports the Pod readiness for this ArkServer.
+//
+// "Ready" means at least the desired replica count is reflected in
+// Status.ReadyReplicas. A missing StatefulSet (e.g. transient API race
+// after a fresh apply) is reported via the err return so the status update
+// can pick a distinct condition reason.
+func (r *ArkServerReconciler) probeStatefulSetReady(ctx context.Context, server *arkv1.ArkServer) (string, bool, error) {
+	sts := &appsv1.StatefulSet{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      statefulSetName(server),
+		Namespace: server.Namespace,
+	}, sts); err != nil {
+		return "", false, err
+	}
+	podName := sts.Name + "-0"
+	var desired int32 = 1
+	if sts.Spec.Replicas != nil {
+		desired = *sts.Spec.Replicas
+	}
+	if desired == 0 {
+		return podName, false, nil
+	}
+	return podName, sts.Status.ReadyReplicas >= desired, nil
+}
+
+func (r *ArkServerReconciler) probeDataPVCBound(ctx context.Context, server *arkv1.ArkServer) (bool, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      dataPVCName(server),
+		Namespace: server.Namespace,
+	}, pvc); err != nil {
+		return false, err
+	}
+	return pvc.Status.Phase == corev1.ClaimBound, nil
 }
 
 func (r *ArkServerReconciler) applyRenderedConfigCM(ctx context.Context, server *arkv1.ArkServer, parent *resolvedParent) error {
@@ -113,8 +175,6 @@ func (r *ArkServerReconciler) applyRenderedConfigCM(ctx context.Context, server 
 	return err
 }
 
-// applyDataPVC creates the per-map PVC or, for an existing one, reconciles
-// only the size request (the only PVC spec field K8s allows to mutate post-bind).
 func (r *ArkServerReconciler) applyDataPVC(ctx context.Context, server *arkv1.ArkServer, parent *resolvedParent) error {
 	desired := buildDataPVC(server, parent)
 	target := &corev1.PersistentVolumeClaim{}
@@ -136,8 +196,6 @@ func (r *ArkServerReconciler) applyDataPVC(ctx context.Context, server *arkv1.Ar
 	return err
 }
 
-// applyService creates the Service or refreshes mutable fields. ClusterIP is
-// immutable post-creation so it is preserved across updates.
 func (r *ArkServerReconciler) applyService(ctx context.Context, server *arkv1.ArkServer, parent *resolvedParent) error {
 	desired := buildService(server, parent)
 	target := &corev1.Service{}
@@ -163,9 +221,6 @@ func (r *ArkServerReconciler) applyService(ctx context.Context, server *arkv1.Ar
 	return err
 }
 
-// applyStatefulSet creates the StatefulSet or, for an existing one, refreshes
-// the fields K8s allows to mutate post-creation (replicas, template, update
-// strategy). selector and serviceName are immutable.
 func (r *ArkServerReconciler) applyStatefulSet(ctx context.Context, server *arkv1.ArkServer, parent *resolvedParent) error {
 	desired := buildStatefulSet(server, parent)
 	target := &appsv1.StatefulSet{}
