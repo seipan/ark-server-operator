@@ -145,7 +145,7 @@ func (r *ArkClusterReconciler) validatePasswordsSecret(ctx context.Context, clus
 	}
 	for _, key := range []string{serverKey, adminKey} {
 		if _, ok := secret.Data[key]; !ok {
-			return fmt.Errorf("Secret %s is missing data key %q", ref.Name, key), true
+			return fmt.Errorf("secret %s is missing data key %q", ref.Name, key), true
 		}
 	}
 	return nil, false

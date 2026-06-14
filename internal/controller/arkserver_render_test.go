@@ -27,6 +27,8 @@ import (
 	arkv1 "github.com/seipan/ark-server-operator/api/v1"
 )
 
+const testMapGenesis = "Genesis"
+
 func newClusterForServer() *arkv1.ArkCluster {
 	return &arkv1.ArkCluster{
 		ObjectMeta: metav1.ObjectMeta{
@@ -103,7 +105,7 @@ func TestResolveServerMap_PrefersOverride(t *testing.T) {
 
 func TestResolveServerMap_FallsBackToEnum(t *testing.T) {
 	s := newServerForRender()
-	if got := resolveServerMap(s); got != "Genesis" {
+	if got := resolveServerMap(s); got != testMapGenesis {
 		t.Errorf("resolveServerMap = %q, want Genesis", got)
 	}
 }
@@ -218,7 +220,7 @@ func TestBuildRenderedConfigCM_AllKeys(t *testing.T) {
 	if cm.Labels[LabelComponent] != ComponentConfig {
 		t.Errorf("component label = %q, want %q", cm.Labels[LabelComponent], ComponentConfig)
 	}
-	if cm.Labels[LabelMap] != "Genesis" {
+	if cm.Labels[LabelMap] != testMapGenesis {
 		t.Errorf("map label = %q, want Genesis", cm.Labels[LabelMap])
 	}
 }
@@ -333,7 +335,7 @@ func TestBuildStatefulSet_BasicShape(t *testing.T) {
 			envByName[e.Name] = e.Value
 		}
 	}
-	if envByName["SERVERMAP"] != "Genesis" {
+	if envByName["SERVERMAP"] != testMapGenesis {
 		t.Errorf("SERVERMAP env = %q", envByName["SERVERMAP"])
 	}
 	if envByName["STEAMPORT"] != "31012" {

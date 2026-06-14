@@ -177,4 +177,3 @@ func TestBuildSharedStoragePVC_FromSpec(t *testing.T) {
 		t.Errorf("component label = %q, want %q", pvc.Labels[LabelComponent], ComponentSharedStorage)
 	}
 }
-

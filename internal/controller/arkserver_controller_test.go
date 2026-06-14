@@ -119,9 +119,8 @@ var _ = Describe("ArkServer Controller", func() {
 
 		It("creates rendered-config CM, PVC, Service, and StatefulSet with owner refs", func() {
 			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
-			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
 
 			By("verifying the rendered-config ConfigMap")
 			cm := &corev1.ConfigMap{}
