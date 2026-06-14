@@ -162,6 +162,78 @@ var _ = Describe("ArkServer Controller", func() {
 			Expect(sts.OwnerReferences).To(HaveLen(1))
 		})
 
+		It("scales the StatefulSet to zero replicas when desiredState is Stopped", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("flipping desiredState to Stopped")
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+			server.Spec.DesiredState = arkv1.StateStopped
+			Expect(k8sClient.Update(ctx, server)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: serverName, Namespace: namespace,
+			}, sts)).To(Succeed())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(0)))
+
+			By("verifying the PVC is still present (saves retained)")
+			pvc := &corev1.PersistentVolumeClaim{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: serverName + "-data", Namespace: namespace,
+			}, pvc)).To(Succeed())
+		})
+
+		It("scales the StatefulSet to zero replicas when desiredState is Hibernated", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+			server.Spec.DesiredState = arkv1.StateHibernated
+			Expect(k8sClient.Update(ctx, server)).To(Succeed())
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: serverName, Namespace: namespace,
+			}, sts)).To(Succeed())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(0)))
+		})
+
+		It("scales back up to one replica when desiredState returns to Running", func() {
+			r := &ArkServerReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+
+			By("starting from Stopped")
+			server := &arkv1.ArkServer{}
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+			server.Spec.DesiredState = arkv1.StateStopped
+			Expect(k8sClient.Update(ctx, server)).To(Succeed())
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("flipping back to Running")
+			Expect(k8sClient.Get(ctx, serverNN, server)).To(Succeed())
+			server.Spec.DesiredState = arkv1.StateRunning
+			Expect(k8sClient.Update(ctx, server)).To(Succeed())
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: serverNN})
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: serverName, Namespace: namespace,
+			}, sts)).To(Succeed())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
+		})
+
 		It("returns RequeueAfter when the parent ArkCluster is missing", func() {
 			By("deleting the parent ArkCluster")
 			cluster := &arkv1.ArkCluster{}

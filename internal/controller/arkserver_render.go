@@ -110,6 +110,18 @@ func resolveServerMap(s *arkv1.ArkServer) string {
 	return string(s.Spec.Map)
 }
 
+// resolveReplicas maps spec.desiredState to the StatefulSet replica count.
+// Stopped and Hibernated both scale to zero; auto-hibernation triggering is
+// deferred to Phase 3. Wiped is handled by the deletion path (PR3) — until
+// then it falls through to the default and behaves like Running.
+func resolveReplicas(s *arkv1.ArkServer) int32 {
+	switch s.Spec.DesiredState {
+	case arkv1.StateStopped, arkv1.StateHibernated:
+		return 0
+	}
+	return 1
+}
+
 // mergeIni concatenates the cluster-wide ini with the per-map override.
 // A trailing newline is added between sections so the merged result remains
 // valid ini even when the inputs are missing terminal newlines.
@@ -227,11 +239,11 @@ func buildService(server *arkv1.ArkServer, parent *resolvedParent) *corev1.Servi
 	}
 }
 
-// buildStatefulSet produces the StatefulSet that runs the ARK server. PR1
-// always sets replicas=1 (Running path); state-machine branches for Stopped
-// / Hibernated / Wiped come in later PRs.
+// buildStatefulSet produces the StatefulSet that runs the ARK server. The
+// replica count is driven by spec.desiredState via resolveReplicas; Wiped is
+// handled by the deletion path (PR3) rather than by zeroing replicas here.
 func buildStatefulSet(server *arkv1.ArkServer, parent *resolvedParent) *appsv1.StatefulSet {
-	replicas := int32(1)
+	replicas := resolveReplicas(server)
 	mapName := resolveServerMap(server)
 	labels := ServerLabels(server, parent.cluster.Name, mapName, ComponentGameServer)
 
